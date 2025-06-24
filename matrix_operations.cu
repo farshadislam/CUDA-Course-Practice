@@ -12,7 +12,9 @@ void cpu_vector_addition(int *a, int *b, int *c, int numRows, int numCols)
     {
         for (int j = 0; j < numCols; j++)
         {
-            c[i][j] = a[i][j] + b[i][j];
+            // c[i][j] = a[i][j] + b[i][j]; --> (Would be written like this) if I were using double pointers
+            int memIndex = i * numCols + j; // Instead I appeal to row-major order
+            c[memIndex] = a[memIndex] + b[memIndex];
         }
     }
 }
