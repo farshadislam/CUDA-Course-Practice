@@ -23,7 +23,7 @@ void cpu_vector_addition(int *a, int *b, int *c, int numRows, int numCols)
     }
 }
 
-void gpu_vector_addition(int *a, int *b, int *c, int numRows, int numCols)
+__global__ void gpu_vector_addition(int *a, int *b, int *c, int numRows, int numCols)
 {
     int i = blockIdx.x       // Block index inside of the grid
                 * blockDim.x // Number of threads per block
@@ -47,7 +47,7 @@ void init_vector(int *vec, int numRows, int numCols)
     for (int i = 0; i < numRows; i++)
         for (int j = 0; j < numCols; j++)
         {
-            int trueIndex = i + j * numRows;
+            int trueIndex = i * numCols + j;
             vec[trueIndex] = rand() % 10; // Returns a pseudo-random integer between 0 and 9
         }
 }
@@ -94,7 +94,7 @@ int main()
         (M + BLOCK_SIZE_Y - 1) / BLOCK_SIZE_Y);
 
     /* Warm up runs */
-    printf("Warm up runs:\n");
+    printf("Warming up...\n");
     for (int i = 0; i < 3; i++)
     {
         cpu_vector_addition(h_a, h_b, h_c_cpu, N, M);
@@ -102,7 +102,7 @@ int main()
         cudaDeviceSynchronize();
     }
 
-    /* Runtime in milliseconds for CPU implementation */
+    /* Runtime for CPU implementation */
     printf("Benchmarking CPU implementation...\n");
     double cpu_total_time = 0.0;
     for (int i = 0; i < 5; i++)
@@ -114,7 +114,7 @@ int main()
     }
     double cpu_avg_time = cpu_total_time / 5.0;
 
-    /* Runtime in milliseconds for GPU implementation */
+    /* Runtime for GPU implementation */
     printf("Benchmarking GPU implementation...\n");
     double gpu_total_time = 0.0;
     for (int i = 0; i < 100; i++)
@@ -130,29 +130,33 @@ int main()
 
     /* Verify that both outputs are the same */
     cudaMemcpy(h_c_gpu, d_c_gpu, size, cudaMemcpyDeviceToHost);
-    bool correct_1d = true;
-    for (int i = 0; i < N; i++)
+    bool correct = true;
+    for (int i = 0; i < N * M; i++)
     {
-        if (fabs(h_c_cpu[i] - h_c_gpu[i]) > 1e-4)
+        if (h_c_cpu[i] != h_c_gpu[i]) // Stored in memory in row-major order, so indexing through just requires one element accessor
         {
-            correct_1d = false;
-            std::cout << i << " cpu: " << h_c_cpu[i] << " != " << h_c_gpu[i] << std::endl;
-            break;
+
+            {
+                correct = false;
+                std::cout << i << " cpu: " << h_c_cpu[i] << " != " << h_c_gpu[i] << std::endl;
+                break;
+            }
         }
     }
-    printf("1D Results are %s\n", correct_1d ? "correct" : "incorrect");
+    printf("\nResults are %s\n", correct ? "correct!" : "incorrect!"); // Second half of print statement depends on boolean result of correct
 
-    printf("CPU average time: %f milliseconds\n", cpu_avg_time * 1000);
-    printf("GPU 1D average time: %f milliseconds\n", gpu_avg_time * 1000);
-    printf("Speedup (CPU vs GPU 1D): %fx\n", cpu_avg_time / gpu_avg_time);
+    printf("\nCPU average time: %f milliseconds\n", cpu_avg_time * 1000);
+    printf("GPU average time: %f milliseconds\n", gpu_avg_time * 1000);
+    printf("Speedup (CPU vs GPU): %fx\n", cpu_avg_time / gpu_avg_time);
 
     free(h_a);
     free(h_b);
     free(h_c_cpu);
     free(h_c_gpu);
-    free(d_a);
-    free(d_b);
-    free(d_c_gpu);
+
+    cudaFree(d_a);
+    cudaFree(d_b);
+    cudaFree(d_c_gpu);
 
     return 0;
 }
