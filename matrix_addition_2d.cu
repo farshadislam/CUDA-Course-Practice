@@ -5,10 +5,10 @@
 #include <math.h>         // Math
 #include <iostream>       // Allows for use of C++ standard input/output
 
-#define N 8 // numRows in matrix
-#define M 4 // numCols in matrix
-#define BLOCK_SIZE_X 8
-#define BLOCK_SIZE_Y 4
+#define N 2000 // numRows in matrix
+#define M 1500 // numCols in matrix
+#define BLOCK_SIZE_X 32
+#define BLOCK_SIZE_Y 16
 
 void cpu_vector_addition(int *a, int *b, int *c, int numRows, int numCols)
 {
@@ -99,7 +99,7 @@ int main()
     {
         cpu_vector_addition(h_a, h_b, h_c_cpu, N, M);
         gpu_vector_addition<<<gridDim, blockDim>>>(d_a, d_b, d_c_gpu, N, M);
-        cudaDeviceSynchronize();
+        cudaDeviceSynchronize(); // Alerts us if a preceding CUDA operation has failed
     }
 
     /* Runtime for CPU implementation */
@@ -149,12 +149,12 @@ int main()
     printf("GPU average time: %f milliseconds\n", gpu_avg_time * 1000);
     printf("Speedup (CPU vs GPU): %fx\n", cpu_avg_time / gpu_avg_time);
 
-    free(h_a);
+    free(h_a); // Free host memory
     free(h_b);
     free(h_c_cpu);
     free(h_c_gpu);
 
-    cudaFree(d_a);
+    cudaFree(d_a); // Free device memory
     cudaFree(d_b);
     cudaFree(d_c_gpu);
 
