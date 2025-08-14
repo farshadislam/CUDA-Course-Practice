@@ -40,3 +40,24 @@ __global__ void gpu_vector_addition(int *matrixA, int *matrixB, int *matrixC, in
         matrixC[i * n + j] = coordValue;
     }
 }
+
+void init_matrix(int *whateverMatrix, int rows, int cols)
+{
+    for (int i = 0; i < rows; i++) // For rows of A
+    {
+        for (int j = 0; j < cols; j++) // For columns of B
+        {
+            whateverMatrix[i * cols + j] = (float)rand() / RAND_MAX;
+            // Needs to index through array like this because of the pointer array
+        }
+    }
+}
+
+/// @brief Just gets the amount of time that occurs between operations
+/// @return The time in seconds, with many, MANY trailing decimal points
+double get_time()
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec * 1e-9;
+}
