@@ -73,7 +73,7 @@ __global__ void tiled_gpu_matmul(int *matrixA, int *matrixB, int *matrixC, int m
         if (col < n && tile * TILE_SIZE + ty < k) // Same dealio here as lines 68-71
             sharedB[ty][tx] = matrixB[(tile * TILE_SIZE + ty) * n + col];
         else
-            sharedB[ty][tx] = 0.0f;
+            sharedB[ty][tx] = 0;
 
         __syncthreads(); // Ensures that all tiles have loaded before starting computations
 
@@ -114,25 +114,76 @@ double get_time()
 
 int main()
 {
-    const int M = 1024; // Unchanging integers
+    const int M = 1024; // Unchanging integers for dimensions of matrices
     const int N = 1024;
     const int K = 1024;
 
-    int *h_A, *h_B, *h_C_cpu, *h_C_gpu;
-    int *d_A, *d_B, *d_C;
+    int *h_A, *h_B, *h_C_cpu, *h_C_gpu; // Host variables (h_C's separate in order to compare CPU performance to GPU performance)
+    int *d_A, *d_B, *d_C;               // Device variables (d_C works as a buffer to translate result matrix back to h_C_gpu)
 
     // Calculate matrix sizes in bytes
-    size_t size_A = M * K * sizeof(int);
+    size_t size_A = M * K * sizeof(int); // size_t used over int because it can store the maximum possible size of any array
     size_t size_B = K * N * sizeof(int);
     size_t size_C = M * N * sizeof(int);
 
-    // Declare device pointers
-    float *d_A, *d_B, *d_C;
+    // Allocate host memory
+    h_A = (int *)malloc(size_A);
+    h_B = (int *)malloc(size_B);
+    h_C_cpu = (int *)malloc(size_C);
+    h_C_gpu = (int *)malloc(size_C);
+
+    // Initialize matrices
+    srand(time(NULL));
+    init_matrix(h_A, M, K);
+    init_matrix(h_B, K, N);
 
     // Allocate device memory
     cudaMalloc(&d_A, size_A);
     cudaMalloc(&d_B, size_B);
     cudaMalloc(&d_C, size_C);
+
+    // Copy data to device
+    cudaMemcpy(d_A, h_A, size_A, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, h_B, size_B, cudaMemcpyHostToDevice);
+
+    // Warm-up runs
+    printf("Performing warm-up runs...\n");
+    for (int i = 0; i < 3; i++)
+    {
+        matmul(h_A, h_B, h_C_cpu, M, K, N);
+        gpu_matmul<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, K, N);
+        cudaDeviceSynchronize();
+    }
+
+    // Benchmark CPU implementation
+    printf("Benchmarking CPU implementation...\n");
+    double cpu_total_time = 0.0;
+    for (int i = 0; i < 20; i++)
+    {
+        double start_time = get_time();
+        matmul(h_A, h_B, h_C_cpu, M, K, N);
+        double end_time = get_time();
+        cpu_total_time += end_time - start_time;
+    }
+    double cpu_avg_time = cpu_total_time / 20.0;
+
+    // Benchmark GPU implementation
+    printf("Benchmarking GPU implementation...\n");
+    double gpu_total_time = 0.0;
+    for (int i = 0; i < 20; i++)
+    {
+        double start_time = get_time();
+        gpu_matmul<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, K, N);
+        cudaDeviceSynchronize();
+        double end_time = get_time();
+        gpu_total_time += end_time - start_time;
+    }
+    double gpu_avg_time = gpu_total_time / 20.0;
+
+    // Print results
+    printf("CPU average time: %f microseconds\n", (cpu_avg_time * 1e6f));
+    printf("GPU average time: %f microseconds\n", (gpu_avg_time * 1e6f));
+    printf("Speedup: %fx\n", cpu_avg_time / gpu_avg_time);
 
     // Kernel launch code
     dim3 blockDim(TILE_SIZE, TILE_SIZE);
@@ -141,6 +192,12 @@ int main()
 
     // Synchronize device
     cudaDeviceSynchronize();
+
+    // Free host memory
+    free(h_A);
+    free(h_B);
+    free(h_C_cpu);
+    free(h_C_gpu);
 
     // Free device memory
     cudaFree(d_A);
