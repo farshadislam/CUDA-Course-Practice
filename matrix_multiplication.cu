@@ -1,110 +1,80 @@
-#include <stdio.h>        // Standard input output (printf, scanf)
-#include <stdlib.h>       // Standard library helper (free, exit, malloc)
-#include <time.h>         // Used to analyze runtime of functions
-#include <cuda_runtime.h> // Wraps CUDA API routines
-#include <math.h>         // Math
-#include <iostream>       // Allows for use of C++ standard input/output
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <cuda_runtime.h>
+#include <iostream>
 
 #define TILE_SIZE 16
 
-void matmul(int *matrixA, int *matrixB, int *matrixC, int m, int n, int k)
+// CPU matrix multiplication
+void matmul_cpu(int *A, int *B, int *C, int M, int N, int K)
 {
-    for (int i = 0; i < m; i++) // For rows of A
+    for (int i = 0; i < M; i++)
     {
-        for (int j = 0; j < n; j++) // For columns of B
+        for (int j = 0; j < N; j++)
         {
-            int valueC = 0;             // What the product that goes into position C[x][y] will be
-            for (int l = 0; l < k; l++) // Means of iterating through non-matching matrices for products
-            {
-                valueC += matrixA[i * k + l]    // i * k always goes to first position in row, l iterates through what remains
-                          * matrixB[j + n * l]; // j always iterates through column specified by n * l
-            }
-            matrixC[i * n + j] = valueC; // Product is passed into C[x][y] until full
+            int sum = 0.0f;
+            for (int l = 0; l < K; l++)
+                sum += A[i * K + l] * B[l * N + j];
+            C[i * N + j] = sum;
         }
     }
 }
 
-/* Basic matrix multiplication using GPU threads*/
-__global__ void gpu_matmul(int *matrixA, int *matrixB, int *matrixC, int m, int n, int k)
+// GPU naive matrix multiplication
+__global__ void matmul_gpu(int *A, int *B, int *C, int M, int N, int K)
 {
-    int i = blockIdx.y * blockDim.y + threadIdx.y; // Block index in grid * # of threads per block * thread index inside of block
-    int j = blockIdx.x * blockDim.x + threadIdx.x; // Similar form: i * cols + j
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if (i < m && j < n)
-    { // Iterators bound by the length and width of the 2D matrix
-        int coordValue = 0;
-        for (int l = 0; l < k; l++)
-        { // Limited iterator that only loops through k operations
-            coordValue += matrixA[i * k + l] + matrixB[j + n * l];
-        }
-        matrixC[i * n + j] = coordValue;
-    }
-}
-
-/// @brief Supposedly even more efficient than GPU matmul, due to its use of shared memory
-/// @param matrixA
-/// @param matrixB
-/// @param matrixC
-/// @param m
-/// @param n
-/// @param k
-/// @return N/A
-
-__global__ void tiled_gpu_matmul(int *matrixA, int *matrixB, int *matrixC, int m, int n, int k)
-{
-    __shared__ int sharedA[TILE_SIZE][TILE_SIZE]; // Tile size is large enough to accomodate matrices with dimensions of at least 1024 along either axes
-    __shared__ int sharedB[TILE_SIZE][TILE_SIZE]; // On-chip, fast memory
-
-    int bx = blockIdx.x, by = blockIdx.y;   // Track block position
-    int tx = threadIdx.x, ty = threadIdx.y; // Track thread position
-
-    int row = by * TILE_SIZE + ty; // Actual coordinates of thread by array location in memory
-    int col = bx * TILE_SIZE + tx;
-
-    int sum = 0; // Dot product for (row, col)
-
-    for (int tile = 0; tile < (k + TILE_SIZE - 1) / TILE_SIZE; ++tile)
-    {                                                                   // Covering all tiles with ceiling division, along shared axis k
-        if (row < m && tile * TILE_SIZE + tx < k)                       // Keep within matrix edges
-            sharedA[ty][tx] = matrixA[row * k + tile * TILE_SIZE + tx]; // Load element from A into shared memory
-        else
-            sharedA[ty][tx] = 0; // Boundary check ensures that anything out of matrix bounds goes to zero
-
-        if (col < n && tile * TILE_SIZE + ty < k) // Same dealio here as lines 68-71
-            sharedB[ty][tx] = matrixB[(tile * TILE_SIZE + ty) * n + col];
-        else
-            sharedB[ty][tx] = 0;
-
-        __syncthreads(); // Ensures that all tiles have loaded before starting computations
-
-        for (int i = 0; i < TILE_SIZE; ++i)
-            sum += sharedA[ty][i] * sharedB[i][tx]; // Partial dot product computed using tile
-
-        __syncthreads(); // Everything syncs again so that all threads are finished being used before new shared memory accessing
-    }
-
-    if (row < m && col < n)
+    if (row < M && col < N)
     {
-        matrixC[row * n + col] = sum; // Each thread writes its accumulated sum into the correct coordinate of the C matrix
+        int sum = 0;
+        for (int l = 0; l < K; l++)
+            sum += A[row * K + l] * B[l * N + col];
+        C[row * N + col] = sum;
     }
-
-    // Beautiful explanation of this procedure here: https://penny-xu.github.io/blog/tiled-matrix-multiplication
 }
 
-void init_matrix(int *whateverMatrix, int rows, int cols)
+// GPU tiled matrix multiplication using shared memory
+__global__ void matmul_tiled(int *A, int *B, int *C, int M, int N, int K)
 {
-    for (int i = 0; i < rows; i++) // For rows of A
+    __shared__ int tileA[TILE_SIZE][TILE_SIZE];
+    __shared__ int tileB[TILE_SIZE][TILE_SIZE];
+
+    int row = blockIdx.y * TILE_SIZE + threadIdx.y;
+    int col = blockIdx.x * TILE_SIZE + threadIdx.x;
+
+    int sum = 0;
+
+    for (int tile = 0; tile < (K + TILE_SIZE - 1) / TILE_SIZE; tile++)
     {
-        for (int j = 0; j < cols; j++) // For columns of B
-        {
-            whateverMatrix[i * cols + j] = rand() / RAND_MAX;
-            // Needs to index through array like this because of the pointer array
-        }
+        int aCol = tile * TILE_SIZE + threadIdx.x;
+        int bRow = tile * TILE_SIZE + threadIdx.y;
+
+        tileA[threadIdx.y][threadIdx.x] = (row < M && aCol < K) ? A[row * K + aCol] : 0.0f;
+        tileB[threadIdx.y][threadIdx.x] = (bRow < K && col < N) ? B[bRow * N + col] : 0.0f;
+
+        __syncthreads();
+
+        for (int i = 0; i < TILE_SIZE; i++)
+            sum += tileA[threadIdx.y][i] * tileB[i][threadIdx.x];
+
+        __syncthreads();
     }
+
+    if (row < M && col < N)
+        C[row * N + col] = sum;
 }
 
-/// @brief Just gets the amount of time that occurs between operations
-/// @return The time in seconds, with many, MANY trailing decimal points
+// Initialize matrix with random ints
+void init_matrix(int *matrix, int rows, int cols)
+{
+    for (int i = 0; i < rows * cols; i++)
+        matrix[i] = static_cast<int>(rand()) / RAND_MAX * 10.0f; // values 0..10
+}
+
+// Timing helper
 double get_time()
 {
     struct timespec ts;
@@ -114,103 +84,88 @@ double get_time()
 
 int main()
 {
-    const int M = 1024; // Unchanging integers for dimensions of matrices
+    const int M = 1024;
     const int N = 1024;
     const int K = 1024;
 
-    int *h_A, *h_B, *h_C_cpu, *h_C_gpu; // Host variables (h_C's separate in order to compare CPU performance to GPU performance)
-    int *d_A, *d_B, *d_C;               // Device variables (d_C works as a buffer to translate result matrix back to h_C_gpu)
+    int *h_A, *h_B, *h_C_cpu, *h_C_gpu;
+    int *d_A, *d_B, *d_C;
 
-    // Calculate matrix sizes in bytes
-    size_t size_A = M * K * sizeof(int); // size_t used over int because it can store the maximum possible size of any array
+    size_t size_A = M * K * sizeof(int);
     size_t size_B = K * N * sizeof(int);
     size_t size_C = M * N * sizeof(int);
 
-    // Allocate host memory
     h_A = (int *)malloc(size_A);
     h_B = (int *)malloc(size_B);
     h_C_cpu = (int *)malloc(size_C);
     h_C_gpu = (int *)malloc(size_C);
 
-    // Initialize matrices
     srand(time(NULL));
     init_matrix(h_A, M, K);
     init_matrix(h_B, K, N);
 
-    // Allocate device memory
     cudaMalloc(&d_A, size_A);
     cudaMalloc(&d_B, size_B);
     cudaMalloc(&d_C, size_C);
 
-    // Copy data to device
     cudaMemcpy(d_A, h_A, size_A, cudaMemcpyHostToDevice);
     cudaMemcpy(d_B, h_B, size_B, cudaMemcpyHostToDevice);
 
-    // Warm-up runs
-    printf("Performing warm-up runs...\n");
-    for (int i = 0; i < 3; i++)
-    {
-        matmul(h_A, h_B, h_C_cpu, M, K, N);
-        gpu_matmul<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, K, N);
-        cudaDeviceSynchronize();
-    }
-
-    // Benchmark CPU implementation
-    printf("Benchmarking CPU implementation...\n");
-    double cpu_total_time = 0.0;
-    for (int i = 0; i < 20; i++)
-    {
-        double start_time = get_time();
-        matmul(h_A, h_B, h_C_cpu, M, K, N);
-        double end_time = get_time();
-        cpu_total_time += end_time - start_time;
-    }
-    double cpu_avg_time = cpu_total_time / 20.0;
-
-    // Benchmark GPU implementation
-    printf("Benchmarking GPU implementation...\n");
-    double gpu_total_time = 0.0;
-    for (int i = 0; i < 20; i++)
-    {
-        double start_time = get_time();
-        gpu_matmul<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, K, N);
-        cudaDeviceSynchronize();
-        double end_time = get_time();
-        gpu_total_time += end_time - start_time;
-    }
-    double gpu_avg_time = gpu_total_time / 20.0;
-
-    // Print results
-    printf("CPU average time: %f microseconds\n", (cpu_avg_time * 1e6f));
-    printf("GPU average time: %f microseconds\n", (gpu_avg_time * 1e6f));
-    printf("Speedup: %fx\n", cpu_avg_time / gpu_avg_time);
-
-    // Kernel launch code
     dim3 blockDim(TILE_SIZE, TILE_SIZE);
     dim3 gridDim((N + TILE_SIZE - 1) / TILE_SIZE, (M + TILE_SIZE - 1) / TILE_SIZE);
-    tiled_gpu_matmul<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, N, K);
 
-    // Synchronize device
+    // Warm-up
+    matmul_cpu(h_A, h_B, h_C_cpu, M, N, K);
+    matmul_gpu<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, N, K);
     cudaDeviceSynchronize();
 
-    // Free host memory
+    // CPU timing
+    double cpu_time = 0;
+    for (int i = 0; i < 5; i++)
+    {
+        double start = get_time();
+        matmul_cpu(h_A, h_B, h_C_cpu, M, N, K);
+        cpu_time += get_time() - start;
+    }
+    cpu_time /= 5;
+
+    // GPU timing
+    double gpu_time = 0;
+    for (int i = 0; i < 5; i++)
+    {
+        double start = get_time();
+        matmul_tiled<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, N, K);
+        cudaDeviceSynchronize();
+        gpu_time += get_time() - start;
+    }
+    gpu_time /= 5;
+
+    // Copy GPU result back
+    cudaMemcpy(h_C_gpu, d_C, size_C, cudaMemcpyDeviceToHost);
+
+    printf("CPU time: %f ms\n", cpu_time * 1000);
+    printf("GPU time: %f ms\n", gpu_time * 1000);
+
+    // Optional: simple correctness check
+    bool correct = true;
+    for (int i = 0; i < M * N; i++)
+    {
+        if (fabs(h_C_cpu[i] - h_C_gpu[i]) > 1e-3)
+        {
+            correct = false;
+            break;
+        }
+    }
+    printf("Results match: %s\n", correct ? "YES" : "NO");
+
+    // Free memory
     free(h_A);
     free(h_B);
     free(h_C_cpu);
     free(h_C_gpu);
-
-    // Free device memory
     cudaFree(d_A);
     cudaFree(d_B);
     cudaFree(d_C);
-
-    // Check for any CUDA errors
-    cudaError_t error = cudaGetLastError();
-    if (error != cudaSuccess)
-    {
-        std::cerr << "CUDA error: " << cudaGetErrorString(error) << std::endl;
-        return -1;
-    }
 
     return 0;
 }
