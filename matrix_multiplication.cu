@@ -13,9 +13,9 @@ void matmul_cpu(int *A, int *B, int *C, int M, int N, int K)
     {
         for (int j = 0; j < N; j++)
         {
-            int sum = 0.0f;
+            int sum = 0;
             for (int l = 0; l < K; l++)
-                sum += A[i * K + l] * B[l * N + j];
+                sum += A[i * K + l] * B[l * N + j]; // M * K (matrix A) times K * N (matrix B) gives M * N (matrix C)
             C[i * N + j] = sum;
         }
     }
@@ -27,11 +27,11 @@ __global__ void matmul_gpu(int *A, int *B, int *C, int M, int N, int K)
     int row = blockIdx.y * blockDim.y + threadIdx.y;
     int col = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if (row < M && col < N)
+    if (row < M && col < N) // Bound check
     {
         int sum = 0;
         for (int l = 0; l < K; l++)
-            sum += A[row * K + l] * B[l * N + col];
+            sum += A[row * K + l] * B[l * N + col]; // Multiple threads are doing this operation on different 2D array elements at the same time
         C[row * N + col] = sum;
     }
 }
@@ -52,19 +52,19 @@ __global__ void matmul_tiled(int *A, int *B, int *C, int M, int N, int K)
         int aCol = tile * TILE_SIZE + threadIdx.x;
         int bRow = tile * TILE_SIZE + threadIdx.y;
 
-        tileA[threadIdx.y][threadIdx.x] = (row < M && aCol < K) ? A[row * K + aCol] : 0.0f;
-        tileB[threadIdx.y][threadIdx.x] = (bRow < K && col < N) ? B[bRow * N + col] : 0.0f;
+        tileA[threadIdx.y][threadIdx.x] = (row < M && aCol < K) ? A[row * K + aCol] : 0; // Map element of A to tile
+        tileB[threadIdx.y][threadIdx.x] = (bRow < K && col < N) ? B[bRow * N + col] : 0; // Map element of B to tile
 
-        __syncthreads();
+        __syncthreads(); // Wait until every element has been loaded into tiles
 
         for (int i = 0; i < TILE_SIZE; i++)
-            sum += tileA[threadIdx.y][i] * tileB[i][threadIdx.x];
+            sum += tileA[threadIdx.y][i] * tileB[i][threadIdx.x]; // Calculate dot product of elements in tiles and get full product matrix C
 
-        __syncthreads();
+        __syncthreads(); // Wait for all threads to finish performing this operation before moving to the next step
     }
 
     if (row < M && col < N)
-        C[row * N + col] = sum;
+        C[row * N + col] = sum; // Fill every element in matrix C
 }
 
 // Initialize matrix with random ints
@@ -90,6 +90,7 @@ int main()
 
     int *h_A, *h_B, *h_C_cpu, *h_C_gpu;
     int *d_A, *d_B, *d_C;
+    int *t_A, *t_B, *t_C;
 
     size_t size_A = M * K * sizeof(int);
     size_t size_B = K * N * sizeof(int);
