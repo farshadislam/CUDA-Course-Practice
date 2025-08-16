@@ -72,7 +72,7 @@ __global__ void matmul_tiled(int *A, int *B, int *C, int M, int N, int K)
 void init_matrix(int *matrix, int rows, int cols)
 {
     for (int i = 0; i < rows * cols; i++)
-        matrix[i] = static_cast<int>(rand()) / RAND_MAX * 10; // values 0..10
+        matrix[i] = rand() % 10; // values 0..10
 }
 
 // Timing helper
@@ -149,12 +149,12 @@ int main()
 
     printf("CPU time: %f ms\n", cpu_time * 1000);
     printf("GPU time: %f ms\n", gpu_time * 1000);
-    printf("Speedup from CPU time by %fx", cpu_time / gpu_time);
+    printf("Speedup from CPU time by %fx\n", cpu_time / gpu_time);
 
     bool correct = true;
     for (int i = 0; i < M * N; i++)
     {
-        if (fabs(h_C_cpu[i] - h_C_gpu[i]) > 1e-3)
+        if (h_C_cpu[i] != h_C_gpu[i])
         {
             correct = false;
             break;
@@ -174,7 +174,7 @@ int main()
     // Kernel launch code
     dim3 blockDim2(TILE_SIZE, TILE_SIZE);
     dim3 gridDim2((N + TILE_SIZE - 1) / TILE_SIZE, (M + TILE_SIZE - 1) / TILE_SIZE);
-    matmul_tiled<<<gridDim2, blockDim2>>>(d_A, d_B, d_C, M, N, K);
+    matmul_tiled<<<gridDim2, blockDim2>>>(t_A, t_B, t_C, M, N, K); // Has to be done with appropriately sized tiles and memory
 
     // Warm-up
     for (int i = 0; i < 5; i++) {
@@ -189,28 +189,26 @@ int main()
         double start = get_time();
         matmul_tiled<<<gridDim2, blockDim2>>>(t_A, t_B, t_C, M, N, K);
         cudaDeviceSynchronize();
-        gpu_time += get_time() - start;
+        gpu_tiled_time += get_time() - start;
     }
     gpu_tiled_time /= 5; // Get average of five runs
 
-    cudaMemcpy(h_C_gpu, d_C, size_C, cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_C_gpu, t_C, size_C, cudaMemcpyDeviceToHost);
 
     printf("\n\nCPU time: %f ms\n", cpu_time * 1000);
-    printf("Tiled GPU time: %f ms\n", gpu_time * 1000);
-    printf("Speedup from CPU time by %fx", cpu_time / gpu_time);
+    printf("Tiled GPU time: %f ms\n", gpu_tiled_time * 1000);
+    printf("Speedup from CPU time by %fx\n", cpu_time / gpu_tiled_time);
 
     correct = true;
     for (int i = 0; i < M * N; i++)
     {
-        if (fabs(h_C_cpu[i] - h_C_gpu[i]) > 1e-3)
+        if (h_C_cpu[i] - h_C_gpu[i])
         {
             correct = false;
             break;
         }
     }
     printf("Results match: %s\n", correct ? "YES" : "NO");
-
-    free(h_C_gpu); // Allow for the memory here to be accessed by tiled matmul
 
     // Free memory
     free(h_A);
