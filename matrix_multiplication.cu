@@ -5,6 +5,7 @@
 #include <iostream>
 
 #define TILE_SIZE 16
+#define BLOCK_SIZE 32
 
 // CPU matrix multiplication
 void matmul_cpu(int *A, int *B, int *C, int M, int N, int K)
@@ -71,7 +72,7 @@ __global__ void matmul_tiled(int *A, int *B, int *C, int M, int N, int K)
 void init_matrix(int *matrix, int rows, int cols)
 {
     for (int i = 0; i < rows * cols; i++)
-        matrix[i] = static_cast<int>(rand()) / RAND_MAX * 10.0f; // values 0..10
+        matrix[i] = static_cast<int>(rand()) / RAND_MAX * 10; // values 0..10
 }
 
 // Timing helper
@@ -112,14 +113,16 @@ int main()
     cudaMemcpy(d_A, h_A, size_A, cudaMemcpyHostToDevice);
     cudaMemcpy(d_B, h_B, size_B, cudaMemcpyHostToDevice);
 
-    dim3 blockDim(TILE_SIZE, TILE_SIZE);
-    dim3 gridDim((N + TILE_SIZE - 1) / TILE_SIZE, (M + TILE_SIZE - 1) / TILE_SIZE);
+    dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
+    dim3 gridDim((N + BLOCK_SIZE - 1) / BLOCK_SIZE, (M + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
     // Warm-up
-    matmul_cpu(h_A, h_B, h_C_cpu, M, N, K);
-    matmul_gpu<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, N, K);
-    cudaDeviceSynchronize();
-
+    for (int i = 0; i < 5; i++) {
+        matmul_cpu(h_A, h_B, h_C_cpu, M, N, K);
+        matmul_gpu<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, N, K);
+        cudaDeviceSynchronize();
+    }
+    
     // CPU timing
     double cpu_time = 0;
     for (int i = 0; i < 5; i++)
@@ -135,19 +138,19 @@ int main()
     for (int i = 0; i < 5; i++)
     {
         double start = get_time();
-        matmul_tiled<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, N, K);
+        matmul_gpu<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, N, K);
         cudaDeviceSynchronize();
         gpu_time += get_time() - start;
     }
-    gpu_time /= 5;
+    gpu_time /= 5; // Get average of five runs
 
     // Copy GPU result back
     cudaMemcpy(h_C_gpu, d_C, size_C, cudaMemcpyDeviceToHost);
 
     printf("CPU time: %f ms\n", cpu_time * 1000);
     printf("GPU time: %f ms\n", gpu_time * 1000);
+    printf("Speedup from CPU time by %fx", cpu_time / gpu_time);
 
-    // Optional: simple correctness check
     bool correct = true;
     for (int i = 0; i < M * N; i++)
     {
@@ -159,14 +162,71 @@ int main()
     }
     printf("Results match: %s\n", correct ? "YES" : "NO");
 
+    /* Now to demonstrate the power of tiled matmul! */
+
+    cudaMalloc(&t_A, size_A);
+    cudaMalloc(&t_B, size_B);
+    cudaMalloc(&t_C, size_C);
+
+    cudaMemcpy(t_A, h_A, size_A, cudaMemcpyHostToDevice);
+    cudaMemcpy(t_B, h_B, size_B, cudaMemcpyHostToDevice);
+
+    // Kernel launch code
+    dim3 blockDim2(TILE_SIZE, TILE_SIZE);
+    dim3 gridDim2((N + TILE_SIZE - 1) / TILE_SIZE, (M + TILE_SIZE - 1) / TILE_SIZE);
+    matmul_tiled<<<gridDim2, blockDim2>>>(d_A, d_B, d_C, M, N, K);
+
+    // Warm-up
+    for (int i = 0; i < 5; i++) {
+        matmul_cpu(h_A, h_B, h_C_cpu, M, N, K);
+        matmul_tiled<<<gridDim2, blockDim2>>>(t_A, t_B, t_C, M, N, K);
+        cudaDeviceSynchronize();
+    }
+
+    double gpu_tiled_time = 0;
+    for (int i = 0; i < 5; i++)
+    {
+        double start = get_time();
+        matmul_tiled<<<gridDim2, blockDim2>>>(t_A, t_B, t_C, M, N, K);
+        cudaDeviceSynchronize();
+        gpu_time += get_time() - start;
+    }
+    gpu_tiled_time /= 5; // Get average of five runs
+
+    cudaMemcpy(h_C_gpu, d_C, size_C, cudaMemcpyDeviceToHost);
+
+    printf("\n\nCPU time: %f ms\n", cpu_time * 1000);
+    printf("Tiled GPU time: %f ms\n", gpu_time * 1000);
+    printf("Speedup from CPU time by %fx", cpu_time / gpu_time);
+
+    correct = true;
+    for (int i = 0; i < M * N; i++)
+    {
+        if (fabs(h_C_cpu[i] - h_C_gpu[i]) > 1e-3)
+        {
+            correct = false;
+            break;
+        }
+    }
+    printf("Results match: %s\n", correct ? "YES" : "NO");
+
+    free(h_C_gpu); // Allow for the memory here to be accessed by tiled matmul
+
     // Free memory
     free(h_A);
     free(h_B);
     free(h_C_cpu);
     free(h_C_gpu);
-    cudaFree(d_A);
-    cudaFree(d_B);
-    cudaFree(d_C);
+    
+    cudaFree(t_A);
+    cudaFree(t_B);
+    cudaFree(t_C);
+
+    cudaError_t error = cudaGetLastError();
+    if (error != cudaSuccess) {
+        std::cerr << "CUDA error: " << cudaGetErrorString(error) << std::endl;
+        return -1;
+    }
 
     return 0;
 }
