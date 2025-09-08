@@ -7,7 +7,7 @@
 #define TILE_SIZE 16
 #define BLOCK_SIZE 32
 
-// CPU matrix multiplication
+// CPU matrix multiplication (least efficient)
 void matmul_cpu(int *A, int *B, int *C, int M, int N, int K)
 {
     for (int i = 0; i < M; i++)
@@ -15,32 +15,33 @@ void matmul_cpu(int *A, int *B, int *C, int M, int N, int K)
         for (int j = 0; j < N; j++)
         {
             int sum = 0;
-            for (int l = 0; l < K; l++)
-                sum += A[i * K + l] * B[l * N + j]; // M * K (matrix A) times K * N (matrix B) gives M * N (matrix C)
+            for (int l = 0; l < K; l++) // "l" tracks indices in row-major for A and column-major for B
+                sum += A[i * K + l] * B[l * N + j]; // M * K (matrix A) x K * N (matrix B) = M * N (matrix C)
             C[i * N + j] = sum;
         }
     }
 }
 
-// GPU naive matrix multiplication
+// GPU native matrix multiplication
 __global__ void matmul_gpu(int *A, int *B, int *C, int M, int N, int K)
 {
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    int row = blockIdx.y // Block index in grid
+            * blockDim.y // Number of threads in block
+            + threadIdx.y; // Thread index inside block
+    int col = blockIdx.x * blockDim.x + threadIdx.x; // See lines 28-30
 
     if (row < M && col < N) // Bound check
     {
         int sum = 0;
         for (int l = 0; l < K; l++)
             sum += A[row * K + l] * B[l * N + col]; // Multiple threads are doing this operation on different 2D array elements at the same time
-        C[row * N + col] = sum;
+        C[row * N + col] = sum; // Total sum operations add together to give index in C-array
     }
 }
 
 // GPU tiled matrix multiplication using shared memory
-__global__ void matmul_tiled(int *A, int *B, int *C, int M, int N, int K)
-{
-    __shared__ int tileA[TILE_SIZE][TILE_SIZE];
+__global__ void matmul_tiled(int *A, int *B, int *C, int M, int N, int K) {
+    __shared__ int tileA[TILE_SIZE][TILE_SIZE]; // Much faster than standard GPU ops because of it being on chip, meaning that all threads in the same thread block are all able to work in tandem for full coalescence
     __shared__ int tileB[TILE_SIZE][TILE_SIZE];
 
     int row = blockIdx.y * TILE_SIZE + threadIdx.y;
@@ -116,7 +117,7 @@ int main()
     dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
     dim3 gridDim((N + BLOCK_SIZE - 1) / BLOCK_SIZE, (M + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
-    // Warm-up
+    // Warm-up runs (Machinery can behave unpredictably during first passes)
     for (int i = 0; i < 5; i++) {
         matmul_cpu(h_A, h_B, h_C_cpu, M, N, K);
         matmul_gpu<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, N, K);
