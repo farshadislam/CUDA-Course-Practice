@@ -21,3 +21,6 @@ This is about as simple as implementing functions with CUDA can get. Typically, 
 Same idea here but this also introduces the idea of tiled matrix multiplication using shared memory (wowwwww). This is supposed to be even more efficient than standard mutlithreading due to the fact that all the computations happen within the same thread block. And sure enough, it actually does provide a significant improvement upon the standard GPU method.
 
 ![Benchmarks for different ways of multiplaying matrices shown sequentially](./Screenshot%202025-09-07%20181458.png)
+
+## NOTE:
+This will only verifiably work for NVIDIA GPUS at the processing power of the GeForce 1660 Super or higher. In fact, due to the architectures in the 30 series and beyond being so far beyond my personal hardware, the speedups should be even more noteworthy.
