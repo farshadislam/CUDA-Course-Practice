@@ -21,15 +21,18 @@ using namespace std;
     }
  };
 
- void write_matrix(ofstream &file, float *storeHere, int numRows, int numCols) {
+void write_matrix(ofstream &file, float *storeHere, int numRows, int numCols) {
     for (size_t i = 0; i < numRows; i++) {
         for (size_t j = 0; j < numCols; j++) {
             file << storeHere[i * numCols + j];
             if (j != numCols - 1) {
-                file << ",";
+                file << ","; // Adds a comma separator for every value except for the last one in the row
             }
         }
-        file << "\n";
+        
+        if (i != numRows - 1) {
+            file << "\n";       // normal row separator
+        }
     }   
 }
 
@@ -50,7 +53,7 @@ using namespace std;
     }
 
     write_matrix(output, matrixA, main_x, main_y);
-    output << "\n";
+    output << endl << endl;
     write_matrix(output, matrixB, main_x, main_y);
 
     output.close();
